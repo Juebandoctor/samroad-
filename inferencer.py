@@ -205,7 +205,16 @@ def infer_one_img(net, img, config):
     pred_edges = np.array(pred_edges).reshape(-1, 2)
     pred_nodes = graph_points[:, ::-1]  # to rc
 
-    return pred_nodes, pred_edges, fused_keypoint_mask, fused_road_mask
+    # ===== Local Repair A0 =====
+    raw_edges = pred_edges.copy()  # save pre-repair edges
+    if getattr(config, 'ENABLE_LOCAL_REPAIR', False):
+        from local_repair import repair_endpoints_a0, print_repair_stats
+        pred_edges, repair_stats = repair_endpoints_a0(
+            graph_points, pred_edges, fused_road_mask, config)
+        print_repair_stats(repair_stats)
+    # ===== End Local Repair =====
+
+    return pred_nodes, pred_edges, raw_edges, fused_keypoint_mask, fused_road_mask
 
 if __name__ == "__main__":
     config = load_config(args.config)
@@ -253,7 +262,7 @@ if __name__ == "__main__":
         img = read_rgb_img(rgb_pattern.format(img_id))
         start_seconds = time.time()
         # coords in (r, c)
-        pred_nodes, pred_edges, itsc_mask, road_mask = infer_one_img(net, img, config)
+        pred_nodes, pred_edges, raw_edges, itsc_mask, road_mask = infer_one_img(net, img, config)
         end_seconds = time.time()
         total_inference_seconds += (end_seconds - start_seconds)
 
@@ -268,6 +277,30 @@ if __name__ == "__main__":
         cv2.imwrite(os.path.join(mask_save_dir, f'{img_id}_road.png'), road_mask)
         cv2.imwrite(os.path.join(mask_save_dir, f'{img_id}_itsc.png'), itsc_mask)
 
+        # ===== Save raw (pre-repair) output when repair is on =====
+        repair_enabled = getattr(config, 'ENABLE_LOCAL_REPAIR', False)
+        if repair_enabled:
+            # Save raw viz
+            viz_raw_dir = os.path.join(output_dir, 'viz_raw')
+            if not os.path.exists(viz_raw_dir):
+                os.makedirs(viz_raw_dir)
+            viz_raw = triage.visualize_image_and_graph(
+                np.copy(img), pred_nodes / img_size, raw_edges, img_size)
+            cv2.imwrite(os.path.join(viz_raw_dir, f'{img_id}.png'), viz_raw)
+
+            # Save raw graph
+            if config.DATASET == 'spacenet':
+                raw_nodes_save = np.stack([400 - pred_nodes[:, 0], pred_nodes[:, 1]], axis=1)
+            else:
+                raw_nodes_save = pred_nodes
+            raw_graph_s2g = graph_utils.convert_to_sat2graph_format(raw_nodes_save, raw_edges)
+            graph_raw_dir = os.path.join(output_dir, 'graph_raw')
+            if not os.path.exists(graph_raw_dir):
+                os.makedirs(graph_raw_dir)
+            with open(os.path.join(graph_raw_dir, f'{img_id}.p'), 'wb') as file:
+                pickle.dump(raw_graph_s2g, file)
+
+        # ===== Save repaired output (or normal output if repair off) =====
         viz_save_dir = os.path.join(output_dir, 'viz')
         if not os.path.exists(viz_save_dir):
             os.makedirs(viz_save_dir)
