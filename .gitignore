@@ -25,6 +25,5 @@ wandb/
 runs/
 
 # Temporary / Personal Documents
-*.pdf
 review.txt
 gld_road_paper.txt
